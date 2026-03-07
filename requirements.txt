@@ -1,14 +1,17 @@
+# Python 3.11 or 3.12 required (3.14 breaks langchain/pydantic type inference).
+# Set PYTHON_VERSION=3.11.11 on Render or use .python-version in build root.
+
 langchain==0.1.16
 langchain-groq==0.1.0
 langchain-astradb==0.2.0
 langchain-core==0.1.42
 langchain-community==0.0.32
-python-dotenv
-pydantic-settings
-flask
-flask-cors
-requests
-huggingface-hub
+python-dotenv>=1.0,<3
+pydantic-settings>=2.0,<3
+flask>=3.0,<4
+flask-cors>=4.0,<5
+requests>=2.28,<3
+huggingface-hub>=0.20
 astrapy>=1.1.0,<2.0
-numpy
-gunicorn
+numpy>=1.26,<2
+gunicorn>=21,<24
