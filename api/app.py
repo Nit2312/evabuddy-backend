@@ -1,5 +1,6 @@
 import re
 import sys
+import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
@@ -57,6 +58,8 @@ embeddings = None
 total_cases = 0
 total_chunks = 0
 system_initialized = False
+_rag_init_lock = threading.Lock()
+_rag_init_done = threading.Event()
 
 # Eval set for Recall@k
 _eval_relevance = []
@@ -262,15 +265,18 @@ Reply with ONLY the answer. Your first line must start with "1." or "No procedur
 
 
 def initialize_rag_system():
-    """Initialize the RAG system if not already done"""
+    """Initialize the RAG system if not already done. Call from background thread only; do not call from request handlers."""
     global system_initialized
 
-    if not system_initialized:
+    if system_initialized:
+        return True, "System already initialized"
+    with _rag_init_lock:
+        if system_initialized:
+            return True, "System already initialized"
         success, message = load_and_process_data()
         system_initialized = success
+        _rag_init_done.set()
         return success, message
-
-    return True, "System already initialized"
 
 
 def get_retrieved_sources(query):
@@ -458,9 +464,16 @@ def api_chat():
             return jsonify({'error': f'Message too long (max {MAX_MESSAGE_LENGTH} characters)'}), 400
 
         if not system_initialized:
-            success, message = initialize_rag_system()
-            if not success:
-                return jsonify({'error': message}), 500
+            wait_seconds = 60
+            if not _rag_init_done.wait(timeout=wait_seconds):
+                resp = jsonify({
+                    'error': 'System is still initializing. Please try again in 15–30 seconds.'
+                })
+                resp.status_code = 503
+                resp.headers['Retry-After'] = '30'
+                return resp
+            if not system_initialized:
+                return jsonify({'error': 'System failed to initialize. Please try again later.'}), 503
 
         try:
             sources = get_retrieved_sources(user_input)
@@ -544,7 +557,6 @@ def api_evaluate():
 
 
 # ── Startup initialization ────────────────────────────────────────────────────
-import threading
 
 def _startup_init():
     """Run RAG initialization in a background thread so the server is
