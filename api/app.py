@@ -1,12 +1,14 @@
 import re
 import sys
 import threading
+from typing import Any
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import json
 from dotenv import load_dotenv
 import traceback
+from pydantic.v1 import SecretStr
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_astradb import AstraDBVectorStore
@@ -33,7 +35,12 @@ _CORS_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-CORS(app, origins=[o for o in _CORS_ORIGINS if o], supports_credentials=True)
+CORS(
+    app,
+    origins=[o for o in _CORS_ORIGINS if o],
+    supports_credentials=True,
+    expose_headers=["Retry-After"],
+)
 
 # Security: input limits
 MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "10000"))
@@ -51,7 +58,7 @@ def security_headers(response):
     return response
 
 # Global variables for RAG system
-rag_chain = None
+rag_chain: Any = None
 retriever = None
 vectorstore = None
 embeddings = None
@@ -188,10 +195,15 @@ class RouterHuggingFaceEmbeddings(Embeddings):
         self._client = InferenceClient(model=model_name, token=api_key)
 
     def embed_documents(self, texts):
-        result = self._client.feature_extraction(texts)
-        if isinstance(result, list) and result and isinstance(result[0], float):
-            return [result]
-        return result
+        # HF client expects a single string per call; batch by iterating inputs.
+        vectors = []
+        for text in texts:
+            result = self._client.feature_extraction(text)
+            if isinstance(result, list) and result and isinstance(result[0], float):
+                vectors.append(result)
+            else:
+                vectors.append(result[0])
+        return vectors
 
     def embed_query(self, text):
         return self.embed_documents([text])[0]
@@ -203,8 +215,11 @@ def load_and_process_data():
 
     try:
         model_name = "sentence-transformers/all-mpnet-base-v2"
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            raise ValueError("HF_TOKEN is required for endpoint embeddings.")
         embeddings = RouterHuggingFaceEmbeddings(
-            api_key=os.getenv("HF_TOKEN"),
+            api_key=hf_token,
             model_name=model_name,
         )
 
@@ -224,9 +239,10 @@ def load_and_process_data():
             search_kwargs={"k": RAG_FETCH_K}
         )
 
+        groq_api_key = os.getenv("GROQ_API_KEY")
         llm = ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model_name="qwen/qwen3-32b",
+            api_key=SecretStr(groq_api_key) if groq_api_key else None,
+            model="qwen/qwen3-32b",
             temperature=0,
             max_tokens=1536
         )
@@ -478,7 +494,10 @@ def api_chat():
         try:
             sources = get_retrieved_sources(user_input)
             context = _format_docs(sources) if sources else ""
-            response = rag_chain.invoke({"context": context, "question": user_input})
+            chain = rag_chain
+            if chain is None:
+                raise RuntimeError("RAG chain is not initialized.")
+            response = chain.invoke({"context": context, "question": user_input})
             response = _strip_leading_reasoning(response or "")
             if not (response and response.strip()):
                 response = (
@@ -543,7 +562,10 @@ def api_evaluate():
             return jsonify({'error': 'Invalid JSON body'}), 400
         question = (data.get('question') or '').strip()
         response_text = (data.get('response') or '')[:MAX_RESPONSE_LENGTH]
-        sources = data.get('sources') if isinstance(data.get('sources'), list) else []
+        raw_sources = data.get('sources')
+        if not isinstance(raw_sources, list):
+            raw_sources = []
+        sources = [s for s in raw_sources if isinstance(s, dict)]
 
         if not question or not response_text:
             return jsonify({'error': 'question and response are required'}), 400
