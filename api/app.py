@@ -121,6 +121,58 @@ def get_astra_config():
     }
 
 
+# Astra DB caps exact count_documents at 1000; use this and fall back to estimate when exceeded
+_ASTRA_COUNT_UPPER_BOUND = 1000
+
+
+def _get_astra_document_counts(astra_config):
+    """Query Astra DB for case and document chunk counts. Returns (total_cases, total_chunks)."""
+    try:
+        from astrapy import DataAPIClient
+
+        client = DataAPIClient(astra_config["token"])
+        try:
+            db = client.get_database(
+                astra_config["api_endpoint"], keyspace=astra_config["namespace"]
+            )
+        except TypeError:
+            db = client.get_database(
+                astra_config["api_endpoint"], namespace=astra_config["namespace"]
+            )
+        coll = db.get_collection(astra_config["collection_name"])
+
+        try:
+            total = coll.count_documents({}, upper_bound=_ASTRA_COUNT_UPPER_BOUND)
+            cases = 0
+            chunks = 0
+            try:
+                cases = coll.count_documents(
+                    {"metadata.type": "case_record"},
+                    upper_bound=_ASTRA_COUNT_UPPER_BOUND,
+                )
+                chunks = coll.count_documents(
+                    {"metadata.type": "pdf_document"},
+                    upper_bound=_ASTRA_COUNT_UPPER_BOUND,
+                )
+            except Exception:
+                cases = total
+                chunks = 0
+            if cases == 0 and chunks == 0 and total > 0:
+                cases = total
+            return (cases, chunks)
+        except Exception as count_err:
+            if "1000" in str(count_err) or "exceeds" in str(count_err).lower():
+                try:
+                    estimate = coll.estimated_document_count()
+                    return (0, estimate)
+                except Exception:
+                    pass
+            raise count_err
+    except Exception as e:
+        print(f"[RAG] Could not get Astra document counts: {e}", file=sys.stderr)
+        return (0, 0)
+
+
 class RouterHuggingFaceEmbeddings(Embeddings):
     def __init__(self, api_key: str, model_name: str) -> None:
         if not api_key:
@@ -157,8 +209,7 @@ def load_and_process_data():
             collection_name=astra_config["collection_name"],
         )
 
-        total_cases = 0
-        total_chunks = 0
+        total_cases, total_chunks = _get_astra_document_counts(astra_config)
 
         retriever = vectorstore.as_retriever(
             search_type="similarity",
