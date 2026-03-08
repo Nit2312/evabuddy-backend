@@ -1,6 +1,7 @@
 import re
 import sys
 import threading
+from numbers import Real
 from typing import Any
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -194,15 +195,38 @@ class RouterHuggingFaceEmbeddings(Embeddings):
             raise ValueError("HF_TOKEN is required for endpoint embeddings.")
         self._client = InferenceClient(model=model_name, token=api_key)
 
+    @staticmethod
+    def _normalize_vector(result):
+        """Normalize HF output to a single 1D float vector."""
+        if hasattr(result, "tolist"):
+            result = result.tolist()
+
+        if not isinstance(result, list) or not result:
+            raise ValueError("Embedding model returned an empty or invalid vector.")
+
+        first = result[0]
+        if hasattr(first, "tolist"):
+            first = first.tolist()
+
+        # Two common shapes: [dim] or [[dim]].
+        vector = first if isinstance(first, list) else result
+
+        if not isinstance(vector, list) or not vector:
+            raise ValueError("Embedding model returned an invalid vector shape.")
+
+        if isinstance(vector[0], list):
+            vector = vector[0]
+
+        if not vector or not isinstance(vector[0], Real):
+            raise ValueError("Embedding vector contains non-numeric values.")
+
+        return [float(x) for x in vector]
+
     def embed_documents(self, texts):
-        # HF client expects a single string per call; batch by iterating inputs.
         vectors = []
         for text in texts:
             result = self._client.feature_extraction(text)
-            if isinstance(result, list) and result and isinstance(result[0], float):
-                vectors.append(result)
-            else:
-                vectors.append(result[0])
+            vectors.append(self._normalize_vector(result))
         return vectors
 
     def embed_query(self, text):
