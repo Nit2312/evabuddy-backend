@@ -25,9 +25,14 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__)
 
-# CORS: allow the Vercel frontend and local dev (restrict origins only)
-_frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-CORS(app, origins=[_frontend_url, "http://localhost:3000", "http://127.0.0.1:3000"], supports_credentials=True)
+# CORS: Vercel frontend + optional FRONTEND_URL env + local dev
+_CORS_ORIGINS = [
+    "https://evabuddy-frontend.vercel.app",
+    os.getenv("FRONTEND_URL", "http://localhost:3000"),
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+CORS(app, origins=[o for o in _CORS_ORIGINS if o], supports_credentials=True)
 
 # Security: input limits
 MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "10000"))
