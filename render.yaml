@@ -1,0 +1,28 @@
+# Render Blueprint: Web Service from this repo's Dockerfile.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: evabuddy-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_DEBUG
+        value: "0"
+      - key: WEB_CONCURRENCY
+        value: "2"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: ASTRA_DB_API_ENDPOINT
+        sync: false
+      - key: ASTRA_DB_APPLICATION_TOKEN
+        sync: false
+      - key: ASTRA_DB_NAMESPACE
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ASTRA_DB_COLLECTION
+        sync: false
