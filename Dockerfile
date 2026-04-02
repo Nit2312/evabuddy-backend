@@ -34,4 +34,4 @@ ENV PORT=8080 \
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" > /dev/null || exit 1
 
-CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY} --timeout 120 --access-logfile - --error-logfile - --capture-output"]
+CMD ["sh", "-c", "exec gunicorn app:app --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-4} --worker-class gthread --timeout 120 --access-logfile - --error-logfile - --capture-output"]

@@ -1,1 +1,1 @@
-web: gunicorn app:app --timeout 120
+web: gunicorn app:app --bind 0.0.0.0:${PORT:-5001} --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-4} --worker-class gthread --timeout 120 --access-logfile - --error-logfile - --capture-output

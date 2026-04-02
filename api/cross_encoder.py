@@ -1,6 +1,16 @@
 import os
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+
+_DEFAULT_MAX_WORKERS = int(os.getenv("RERANK_MAX_WORKERS", "6"))
+_DEFAULT_MAX_IN_FLIGHT = int(os.getenv("RERANK_MAX_IN_FLIGHT", "12"))
+
+# Reuse a single bounded pool per process so multiple concurrent requests
+# don't create unbounded threads and overwhelm the host / HF API.
+_executor = ThreadPoolExecutor(max_workers=_DEFAULT_MAX_WORKERS)
+_in_flight = threading.Semaphore(_DEFAULT_MAX_IN_FLIGHT)
 
 
 class CrossEncoderReranker:
@@ -17,7 +27,12 @@ class CrossEncoderReranker:
         content = getattr(doc, "page_content", None) or (doc.get("page_content") if isinstance(doc, dict) else "")
         payload = {"inputs": {"source_sentence": query, "sentences": [content]}}
         try:
-            response = requests.post(self.api_url, headers=headers, json=payload, timeout=10)
+            if not _in_flight.acquire(timeout=15):
+                return 0
+            try:
+                response = requests.post(self.api_url, headers=headers, json=payload, timeout=15)
+            finally:
+                _in_flight.release()
             if response.status_code == 200:
                 result = response.json()
                 return result[0] if isinstance(result, list) else result.get("score", 0)
@@ -29,14 +44,15 @@ class CrossEncoderReranker:
         if not docs:
             return []
         scores = []
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(docs))) as executor:
-            future_to_doc = {executor.submit(self._score_one, query, doc): doc for doc in docs}
-            for future in as_completed(future_to_doc):
-                doc = future_to_doc[future]
-                try:
-                    score = future.result()
-                except Exception:
-                    score = 0
-                scores.append((doc, score))
+        # Use shared executor; also cap work submitted per call.
+        to_score = docs[: min(len(docs), max(1, int(self.max_workers)))]
+        future_to_doc = {_executor.submit(self._score_one, query, doc): doc for doc in to_score}
+        for future in as_completed(future_to_doc):
+            doc = future_to_doc[future]
+            try:
+                score = future.result()
+            except Exception:
+                score = 0
+            scores.append((doc, score))
         ranked = sorted(scores, key=lambda x: x[1], reverse=True)
         return [doc for doc, _ in ranked[:top_k]]
